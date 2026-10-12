@@ -63,8 +63,8 @@ Dependencies:
 Example (Windows Command Prompt):
     py ai-parser.py --input "Sample data.xlsx" --out merged_gene_annotations.tsv
 
-https://github.com/zblara/ai-parser.git
 ©2026 Zachary B. Lara 
+https://github.com/zblara/ai-parser.git
       ''')
 
 
