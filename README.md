@@ -14,13 +14,13 @@
 - Writes a UTF-8 TSV file suitable for Excel, R, Python, and other downstream workflows.
 - The Windows version checks for required Python packages and attempts to install missing dependencies.
 
+## Versioning
+
+AI-Parser uses `MAJOR.MINOR.PATCH` versioning. While the project is in `0.x`, it means that the project is in alpha testing. Please wait for an increment of the minor number for a meaningful feature release and the patch number for bug fixes.
+
 **Version: `0.2.0`** (development version)
 
 This `0.2.0` version adds separate per-tool inputs and Bakta support. Check the installed script version with `py -3 ai-parser.py --version`.
-
-## Versioning
-
-AI-Parser uses `MAJOR.MINOR.PATCH` versioning. While the project is in `0.x`, increment the minor number for a meaningful feature release and the patch number for bug fixes.
 
 ## What changed
 
