@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import importlib.util
 import subprocess
+
+
+__version__ = "0.2.0"
 
 
 def ensure_dependencies() -> None:
@@ -41,31 +45,26 @@ ensure_dependencies()
 import pandas as pd
 
 
-print('''
+print(f'''
 ********************************************************
-𝓐𝓷𝓷𝓸𝓽𝓪𝓽𝓲𝓸𝓷 𝓘𝓷𝓽𝓮𝓻𝓶𝓮𝓻𝓰𝓮𝓻 - 𝓟𝓪𝓻𝓼𝓮𝓻 𝓟𝓻𝓸𝓰𝓻𝓪𝓶 (𝒜𝐼-𝒫𝒶𝓇𝓈𝑒𝓇)
+𝓐𝓷𝓷𝓸𝓽𝓪𝓽𝓲𝓸𝓷 𝓘𝓷𝓽𝓮𝓻𝓶𝓮𝓻𝓰𝓮𝓻 - 𝓟𝓪𝓻𝓼𝓮𝓻 𝓟𝓻𝓸𝓰𝓻𝓪𝓶 (𝒜𝐼-𝒫𝒶𝓇𝓈𝑒𝓇) — v{__version__}
 ********************************************************
 
 Merge Roary, Prokka, eggNOG, KEGG and antiSMASH annotations into one TSV row per CDS.
 
-This script is designed for an Excel workbook (.xlsx):
-  - Output: optional pre-existing gene annotation table (header row present)
-  - Roary: gene_presence_absence-style table (header row present)
-  - Prokka: CDS table; supports the sample's headerless 7-column layout and a
-            headered Prokka TSV-style table
-  - eggnog: annotation table with Locus_Tag / Product / Gene columns
-  - KEGG: either an ID-only, headerless list or a table with an ID column
-  - antiSMASH: summary table with Region, Type, From, To and cluster columns
+Accepts separate optional files from Bakta or Prokka, Roary, eggNOG-mapper,
+KEGG/BlastKOALA, and antiSMASH. Excel workbooks are also accepted for each source.
+Use Bakta or Prokka as the master CDS list; all other sources are optional.
 
-Dependencies:
-    python -m pip install pandas openpyxl
+Examples (Windows Command Prompt):
+    py ai-parser.py --prokka prokka.tsv --roary gene_presence_absence.csv \
+      --eggnog sample.emapper.annotations --kegg blastkoala.txt \
+      --antismash regions.tsv --out merged_gene_annotations.tsv
+    py ai-parser.py --bakta bakta.tsv --eggnog annotations.xlsx
+    py ai-parser.py --input "Legacy workbook.xlsx"
 
-Example (Windows Command Prompt):
-    py ai-parser.py --input "Sample data.xlsx" --out merged_gene_annotations.tsv
-
-©2026 Zachary B. Lara 
-https://github.com/zblara/ai-parser.git
-      ''')
+Dependencies: pandas and openpyxl (automatically checked/installed when needed).
+''')
 
 
 BASE_OUTPUT_COLUMNS = [
@@ -223,35 +222,105 @@ def merge_values(values: Iterable[Any]) -> Any:
     return "; ".join(text(v) for v in vals)
 
 
+def _read_delimited(path: Path, kind: str) -> pd.DataFrame:
+    """Read CSV/TSV-like files, handling eggNOG's comment preamble and header."""
+    raw = path.read_text(encoding="utf-8-sig", errors="replace")
+    lines = raw.splitlines()
+    if kind == "eggnog":
+        # eggNOG-mapper files contain metadata comments; preserve the #query header.
+        header_index = next((i for i, line in enumerate(lines)
+                             if line.lstrip().casefold().startswith("#query\t") or
+                                line.lstrip().casefold().startswith("#query,")), None)
+        if header_index is not None:
+            lines = lines[header_index:]
+        else:
+            lines = [line for line in lines if line.strip() and not line.lstrip().startswith("##")]
+    else:
+        lines = [line for line in lines if line.strip() and not line.lstrip().startswith("##")]
+    if not lines:
+        return pd.DataFrame()
+    sample = "\n".join(lines[:8])
+    sep = "," if path.suffix.casefold() == ".csv" else "\t"
+    if path.suffix.casefold() not in {".csv", ".tsv", ".tab"}:
+        # .emapper.annotations and .txt are commonly tab-separated; infer if needed.
+        sep = "\t" if sample.count("\t") >= sample.count(",") else ","
+    from io import StringIO
+    header = 0
+    if kind == "kegg":
+        first_cells = [header_key(v) for v in next(csv.reader([lines[0]], delimiter=sep))]
+        header_tokens = {"id", "geneid", "locustag", "prokkacode", "query", "keggid", "gene", "cdsid", "keggno", "keggannotation", "sequenceid"}
+        if not (set(first_cells) & header_tokens):
+            header = None  # KEGG/BlastKOALA downloads and ID lists are often headerless.
+    return pd.read_csv(StringIO("\n".join(lines)), sep=sep, header=header, dtype=object,
+                       keep_default_na=False, engine="python", on_bad_lines="warn")
+
+
+def read_source_file(path: Optional[Path], kind: str) -> Optional[pd.DataFrame]:
+    """Read a source file independently; infer CSV/TSV/XLSX and common text formats."""
+    if path is None:
+        return None
+    if not path.is_file():
+        raise FileNotFoundError(f"{kind} input does not exist: {path}")
+    suffix = path.suffix.casefold()
+    if suffix in {".xlsx", ".xlsm"}:
+        xls = pd.ExcelFile(path, engine="openpyxl")
+        # Prefer a sheet whose name identifies the source, otherwise the first sheet.
+        candidates = {name.casefold(): name for name in xls.sheet_names}
+        wanted = {"eggnog": ["eggnog", "annotations"], "antismash": ["antismash", "regions"],
+                  "prokka": ["prokka", "features"], "bakta": ["bakta", "features"],
+                  "roary": ["roary", "gene_presence_absence"], "kegg": ["kegg", "blastkoala"]}.get(kind, [])
+        sheet = next((candidates[n] for n in wanted if n in candidates), xls.sheet_names[0])
+        if kind in {"prokka", "bakta"}:
+            # Headered tool output is normal; preserve headerless legacy 7-column extracts.
+            df0 = pd.read_excel(xls, sheet_name=sheet, header=0, dtype=object)
+            cols = {header_key(c) for c in df0.columns}
+            if cols & {"locustag", "prokkacode", "seqid", "sequenceid", "start"}:
+                df = df0
+            else:
+                df = pd.read_excel(xls, sheet_name=sheet, header=None, dtype=object)
+        elif kind == "kegg":
+            df = pd.read_excel(xls, sheet_name=sheet, header=None, dtype=object)
+        else:
+            df = pd.read_excel(xls, sheet_name=sheet, header=0, dtype=object)
+    elif suffix in {".csv", ".tsv", ".tab", ".txt", ".annotations", ".out"}:
+        df = _read_delimited(path, kind)
+    elif suffix in {".gff", ".gff3"} and kind in {"prokka", "bakta"}:
+        rows = []
+        for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) != 9 or parts[2].casefold() != "cds":
+                continue
+            attrs = dict((kv.split("=", 1) + [""])[:2] for kv in parts[8].split(";") if "=" in kv)
+            rows.append({"contig": parts[0], "feature": parts[2], "start": parts[3], "end": parts[4],
+                         "strand": parts[6], "locus_tag": attrs.get("locus_tag", attrs.get("ID", "")),
+                         "gene": attrs.get("gene", ""), "product": attrs.get("product", "")})
+        df = pd.DataFrame(rows)
+    else:
+        raise ValueError(f"Unsupported {kind} file format '{suffix}'. Use XLSX, CSV/TSV/TXT; Prokka/Bakta also support GFF/GFF3.")
+    df = df.dropna(how="all").reset_index(drop=True)
+    if kind in {"prokka", "bakta"}:
+        df.columns = [text(c) for c in df.columns]
+    return df
+
+
 def read_workbook_sheets(path: Path) -> Dict[str, pd.DataFrame]:
-    """Read sheets with per-sheet header settings, including the headerless sample tabs."""
+    """Backward-compatible reader for the original multi-sheet workbook."""
     xls = pd.ExcelFile(path, engine="openpyxl")
     available = {name.casefold(): name for name in xls.sheet_names}
     sheets: Dict[str, pd.DataFrame] = {}
-
-    # These sheets have column headers in row 1.
-    for wanted in ("Output", "Roary", "eggnog", "antiSMASH"):
-        real_name = available.get(wanted.casefold())
-        if real_name:
-            df = pd.read_excel(xls, sheet_name=real_name, header=0, dtype=object)
+    for kind in ("output", "roary", "eggnog", "antismash"):
+        real = available.get(kind)
+        if real:
+            df = pd.read_excel(xls, sheet_name=real, header=0, dtype=object)
             df.columns = [text(c) for c in df.columns]
-            df = df.dropna(how="all")
-            sheets[wanted.casefold()] = df
-
-    # Prokka in the supplied workbook is a headerless 7-column extract.
-    real_name = available.get("prokka")
-    if real_name:
-        df = pd.read_excel(xls, sheet_name=real_name, header=None, dtype=object)
-        df = df.dropna(how="all").reset_index(drop=True)
-        sheets["prokka"] = df
-
-    # KEGG in the sample is an ID-only, headerless single column.
-    real_name = available.get("kegg")
-    if real_name:
-        df = pd.read_excel(xls, sheet_name=real_name, header=None, dtype=object)
-        df = df.dropna(how="all").reset_index(drop=True)
-        sheets["kegg"] = df
-
+            sheets[kind] = df.dropna(how="all").reset_index(drop=True)
+    for kind in ("prokka", "kegg"):
+        real = available.get(kind)
+        if real:
+            df = pd.read_excel(xls, sheet_name=real, header=None, dtype=object)
+            sheets[kind] = df.dropna(how="all").reset_index(drop=True)
     return sheets
 
 
@@ -263,19 +332,26 @@ def parse_prokka(df: Optional[pd.DataFrame]) -> Dict[str, Dict[str, Any]]:
 
     first_row = [text(v) for v in df.iloc[0].tolist()]
     first_keys = {header_key(v) for v in first_row}
-    headered = bool(first_keys & {"locustag", "prokkacode", "ftype", "seqid"})
+    column_keys = {header_key(v) for v in df.columns}
+    header_tokens = {"locustag", "prokkacode", "ftype", "seqid", "sequenceid", "start"}
+    direct_headered = bool(column_keys & header_tokens) and not all(str(c).isdigit() for c in df.columns)
+    headered = direct_headered or bool(first_keys & header_tokens)
 
     if headered:
-        headers = first_row
-        data = df.iloc[1:].copy()
-        data.columns = headers
-        locus_col = find_column(data.columns, ["locus_tag", "Prokka Code", "gene_id", "ID"])
-        contig_col = find_column(data.columns, ["contig", "seqid", "sequence", "accession"])
+        if direct_headered:
+            headers = [text(v) for v in df.columns]
+            data = df.copy()
+        else:
+            headers = first_row
+            data = df.iloc[1:].copy()
+            data.columns = headers
+        locus_col = find_column(data.columns, ["locus_tag", "Locus Tag", "Prokka Code", "gene_id", "ID", "locus_tag_id"])
+        contig_col = find_column(data.columns, ["contig", "seqid", "sequence", "Sequence Id", "accession"])
         feature_col = find_column(data.columns, ["ftype", "feature", "type"])
         start_col = find_column(data.columns, ["start", "begin"])
         end_col = find_column(data.columns, ["end", "stop"])
         strand_col = find_column(data.columns, ["strand"])
-        product_col = find_column(data.columns, ["product", "annotation", "description"])
+        product_col = find_column(data.columns, ["product", "annotation", "description", "Product"])
         gene_col = find_column(data.columns, ["gene"])
         if locus_col is None:
             raise ValueError("The Prokka sheet appears to have headers, but no locus_tag/Prokka Code column was found.")
@@ -402,29 +478,89 @@ def parse_eggnog(df: Optional[pd.DataFrame]) -> Dict[str, List[Dict[str, Any]]]:
     return result
 
 
-def parse_kegg(df: Optional[pd.DataFrame]) -> Tuple[set, bool]:
-    """Return normalized IDs and whether non-ID annotation columns were supplied."""
+def parse_kegg(df: Optional[pd.DataFrame]) -> Tuple[set, bool, Dict[str, Dict[str, Any]]]:
+    """Parse KEGG IDs and optional per-CDS fields such as KEGG No and KEGG Annotation.
+
+    Supports either an ID-only/headerless first-column list or a table whose first
+    row contains headers. KEGG annotations are keyed by the Prokka/CDS ID.
+    """
     ids = set()
+    records: Dict[str, Dict[str, Any]] = {}
     if df is None or df.empty:
-        return ids, False
+        return ids, False, records
 
-    # Use the first column as the ID list in the sample workbook. Header aliases are skipped.
-    id_headers = {"id", "geneid", "locustag", "prokkacode", "query", "keggid", "gene"}
-    for value in df.iloc[:, 0].tolist():
-        raw = text(value)
-        if not raw or header_key(raw) in id_headers:
+    data = df.copy()
+    first_row = [text(v) for v in data.iloc[0].tolist()]
+    normalized_headers = {header_key(v) for v in first_row}
+    known_header_tokens = {
+        "id", "geneid", "locustag", "prokkacode", "query", "keggid",
+        "gene", "cdsid", "locus", "keggno", "keggannotation",
+        "annotation", "ko", "koid", "pathway", "pathwayid",
+    }
+    has_header = bool(normalized_headers & known_header_tokens)
+    if has_header:
+        headers = []
+        for i, value in enumerate(first_row):
+            headers.append(value if value else f"column_{i + 1}")
+        data = data.iloc[1:].copy()
+        data.columns = headers
+    else:
+        # BlastKOALA downloads are headerless: sequence ID, K number, optional definition.
+        # A one-column file is treated as an ID list; 2/3 columns carry KO and definition.
+        if len(data.columns) >= 3:
+            data.columns = ["Sequence ID", "KEGG No", "KEGG Annotation"] + [f"column_{i + 1}" for i in range(3, len(data.columns))]
+        elif len(data.columns) == 2:
+            data.columns = ["Sequence ID", "KEGG No"]
+        else:
+            data.columns = ["Sequence ID"] if len(data.columns) else []
+
+    id_col = find_column(data.columns, [
+        "Prokka Code", "locus_tag", "gene_id", "CDS ID", "query",
+        "query_name", "#query", "ID", "Gene ID", "KEGG ID", "Sequence ID",
+    ])
+    # For ID-only lists or unrecognized ID headers, use the first column.
+    if id_col is None:
+        id_col = data.columns[0] if len(data.columns) else None
+    if id_col is None:
+        return ids, False, records
+
+    kegg_no_col = find_column(data.columns, [
+        "KEGG No", "KEGG Number", "KO", "KO ID", "KEGG Orthology",
+    ])
+    annotation_col = find_column(data.columns, [
+        "KEGG Annotation", "KEGG Description", "KEGG Function",
+        "Annotation", "Description", "Definition", "Product",
+    ])
+
+    annotation_columns = [
+        c for c in data.columns
+        if c != id_col and any(not is_blank(v) for v in data[c].tolist())
+    ]
+    annotations_available = bool(annotation_columns)
+
+    for _, row in data.iterrows():
+        raw_id = text(row.get(id_col))
+        if not raw_id or header_key(raw_id) in {
+            "id", "geneid", "locustag", "prokkacode", "query", "keggid",
+            "gene", "cdsid",
+        }:
             continue
-        key = normalise_locus_tag(raw)
-        if key:
-            ids.add(key)
-
-    annotations_available = False
-    if len(df.columns) > 1:
-        for col in df.columns[1:]:
-            if any(not is_blank(v) for v in df[col].tolist()):
-                annotations_available = True
-                break
-    return ids, annotations_available
+        key = normalise_locus_tag(raw_id)
+        if not key:
+            continue
+        ids.add(key)
+        record = {
+            "kegg_no": text(row.get(kegg_no_col)) if kegg_no_col else "",
+            "kegg_annotation": text(row.get(annotation_col)) if annotation_col else "",
+        }
+        if any(record.values()):
+            existing = records.setdefault(key, {})
+            for field, value in record.items():
+                if value and not existing.get(field):
+                    existing[field] = value
+                elif value and existing.get(field) and value != existing[field]:
+                    existing[field] = merge_values([existing[field], value])
+    return ids, annotations_available, records
 
 
 def parse_antismash(df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
@@ -464,7 +600,7 @@ def build_output(
     prokka_records = parse_prokka(sheets.get("prokka"))
     roary_map = parse_roary(sheets.get("roary"))
     eggnog_map = parse_eggnog(sheets.get("eggnog"))
-    kegg_ids, kegg_annotations_available = parse_kegg(sheets.get("kegg"))
+    kegg_ids, kegg_annotations_available, kegg_map = parse_kegg(sheets.get("kegg"))
     regions = parse_antismash(sheets.get("antismash"))
 
     # Existing Output columns are preserved when available; Prokka defines the CDS row set.
@@ -572,12 +708,28 @@ def build_output(
             row_out[output_col] = merge_values([m.get(map_key, "") for m in egg_matches])
 
         has_kegg = key in kegg_ids
+        kegg_record = kegg_map.get(key, {})
+        # Fill KEGG fields from the KEGG worksheet only when the existing Output
+        # value is blank, preserving any curated values already present.
+        for target, source_key in (
+            ("KEGG No", "kegg_no"),
+            ("KEGG Annotation", "kegg_annotation"),
+        ):
+            target_col = find_column(row_out.keys(), [target])
+            if target_col is None:
+                row_out[target] = kegg_record.get(source_key, "")
+            elif is_blank(row_out.get(target_col)) and kegg_record.get(source_key):
+                row_out[target_col] = kegg_record[source_key]
+
         row_out["KEGG ID list match"] = "yes" if has_kegg else "no"
-        row_out["KEGG annotation availability"] = (
-            "Annotation columns supplied; inspect original KEGG sheet"
-            if kegg_annotations_available
-            else "IDs only; no KO/pathway/annotation columns in supplied KEGG sheet"
-        )
+        if kegg_record.get("kegg_no") or kegg_record.get("kegg_annotation"):
+            row_out["KEGG annotation availability"] = "KEGG No/Annotation imported from KEGG sheet"
+        else:
+            row_out["KEGG annotation availability"] = (
+                "Other annotation columns supplied; no recognized KEGG No/Annotation value for this CDS"
+                if kegg_annotations_available
+                else "IDs only; no KO/pathway/annotation columns in supplied KEGG sheet"
+            )
 
         # Match CDS coordinates to any antiSMASH regions that overlap them.
         start = prokka.get("start")
@@ -655,19 +807,66 @@ def build_output(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Merge Roary, Prokka, eggNOG, KEGG and antiSMASH annotations into one TSV row per CDS."
+        description="Merge optional Bakta/Prokka, Roary, eggNOG, KEGG/BlastKOALA and antiSMASH files into one TSV row per CDS."
     )
-    parser.add_argument("--input", "-i", required=True, help="Input Excel workbook containing the source sheets")
+    parser.add_argument("--version", action="version", version=f"AI-Parser {__version__}")
+    parser.add_argument("--input", "-i", help="Legacy multi-sheet Excel workbook (alternative to individual source options)")
+    parser.add_argument("--bakta", help="Bakta TSV/CSV/XLSX or GFF3 file (preferred master CDS list if supplied)")
+    parser.add_argument("--prokka", help="Prokka TSV/CSV/XLSX or GFF3 file (master CDS list if Bakta is not supplied)")
+    parser.add_argument("--roary", help="Roary gene_presence_absence.csv, TSV, or Excel export")
+    parser.add_argument("--eggnog", help="eggNOG-mapper .emapper.annotations, TSV/CSV, or Excel export")
+    parser.add_argument("--kegg", help="KEGG/BlastKOALA tab-delimited download, ID list, TSV/CSV, or Excel export")
+    parser.add_argument("--antismash", help="antiSMASH region summary table in TSV/CSV/Excel format")
     parser.add_argument("--out", "-o", default="merged_gene_annotations.tsv", help="Output TSV path (default: merged_gene_annotations.tsv)")
     args = parser.parse_args()
 
-    input_path = Path(args.input).expanduser().resolve()
     output_path = Path(args.out).expanduser().resolve()
-    if not input_path.is_file():
-        parser.error(f"Input workbook does not exist: {input_path}")
+    individual = {"bakta": args.bakta, "prokka": args.prokka, "roary": args.roary,
+                  "eggnog": args.eggnog, "kegg": args.kegg, "antismash": args.antismash}
+    if args.input and any(individual.values()):
+        parser.error("Use either --input for a legacy workbook OR individual source options, not both.")
+    if not args.input and not any(individual.values()):
+        parser.error("Provide --bakta or --prokka as a master gene list, or use --input for a legacy workbook.")
 
     try:
-        sheets = read_workbook_sheets(input_path)
+        if args.input:
+            input_path = Path(args.input).expanduser().resolve()
+            if not input_path.is_file():
+                parser.error(f"Input workbook does not exist: {input_path}")
+            sheets = read_workbook_sheets(input_path)
+        else:
+            sheets = {}
+            for kind, raw_path in individual.items():
+                if raw_path:
+                    path = Path(raw_path).expanduser().resolve()
+                    # Bakta and Prokka share the same CDS parser; prefer Bakta when both supplied.
+                    parse_kind = "prokka" if kind == "bakta" else kind
+                    source_df = read_source_file(path, parse_kind)
+                    if kind in {"bakta", "prokka"} and path.suffix.casefold() not in {".gff", ".gff3"}:
+                        cols = {header_key(c) for c in (source_df.columns if source_df is not None else [])}
+                        if not (cols & {"locustag", "prokkacode", "geneid", "id"}):
+                            raise ValueError(
+                                f"Cannot confidently identify {kind} input from its column headers: "
+                                f"{list(source_df.columns)[:15] if source_df is not None else []}. "
+                                "Please provide the native headered TSV/CSV or GFF3, or tell me the column layout."
+                            )
+                    sheets[parse_kind] = source_df
+            if args.bakta:
+                sheets["prokka"] = read_source_file(Path(args.bakta).expanduser().resolve(), "bakta")
+                # parse_prokka reads the normalized Bakta header/feature table identically.
+        # Validate identification rather than silently interpreting an unknown table as a source.
+        for kind in ("prokka", "roary", "eggnog", "kegg", "antismash"):
+            df = sheets.get(kind)
+            if df is None or df.empty:
+                continue
+            cols = {header_key(c) for c in df.columns}
+            if kind == "roary" and not (cols & {"gene", "annotation", "nonuniquegenename"}):
+                raise ValueError(f"Cannot confidently identify {kind} input from its headers: {list(df.columns)[:12]}. Supply Roary gene_presence_absence.csv or an Excel export.")
+            if kind == "eggnog" and not (cols & {"query", "locustag", "queryname", "proteinid", "#query"}):
+                # #query is normalized to query by header_key; this branch covers recognized variants.
+                raise ValueError(f"Cannot confidently identify eggNOG input from its headers: {list(df.columns)[:12]}. Supply eggNOG-mapper .emapper.annotations or an Excel export.")
+            if kind == "antismash" and not (cols & {"from", "start", "regionfrom"} and cols & {"to", "end", "regionto"}):
+                raise ValueError(f"Cannot confidently identify antiSMASH region table from its headers: {list(df.columns)[:12]}. Supply a region summary table with start/end coordinates.")
         result = build_output(sheets, output_path)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -676,7 +875,8 @@ def main() -> int:
     print(f"Wrote: {output_path}")
     print(f"Genes/CDS rows: {len(result):,}")
     print(f"Columns: {len(result.columns):,}")
-    print("Note: if the KEGG sheet only contains IDs, the script can report ID matches but cannot infer KO or pathway annotations.")
+    print("Optional annotation inputs not supplied are skipped.")
+    print("Note: KEGG/BlastKOALA assignments are imported only when the source file contains KO/definition columns.")
     return 0
 
 

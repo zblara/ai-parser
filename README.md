@@ -1,161 +1,106 @@
-# 𝓐𝓷𝓷𝓸𝓽𝓪𝓽𝓲𝓸𝓷 𝓘𝓷𝓽𝓮𝓻𝓶𝓮𝓻𝓰𝓮𝓻 - 𝓟𝓪𝓻𝓼𝓮𝓻 𝓟𝓻𝓸𝓰𝓻𝓪𝓶 (𝒜𝐼-𝒫𝒶𝓇𝓈𝑒𝓇)
+# AI-Parser — Annotation Intermerger
 
-**AI-Parser** merges gene annotations from **Prokka, Roary, eggNOG, KEGG, and antiSMASH** into a single tab-separated values (TSV) file, with **one row per Prokka CDS**.
+**Version: `0.2.0`** (development version)
 
-It is designed to help researchers consolidate gene identifiers, functional annotations, pangenome information, and biosynthetic gene cluster (BGC) context for downstream analysis.
+The GitHub version `0.1.2` remains unchanged until you publish a new release. This local `0.2.0` version adds separate per-tool inputs and Bakta support. Check the installed script version with `py -3 ai-parser.py --version`.
 
-## Features
+AI-Parser merges gene/CDS annotations from **Bakta or Prokka**, **Roary**, **eggNOG-mapper**, **KEGG/BlastKOALA**, and **antiSMASH** into one UTF-8 tab-separated file, with one row per unique master CDS identifier.
 
-- Uses Prokka CDS/locus tags as the main gene list when Prokka data are available.
-- Matches Roary gene clusters using Prokka identifiers in isolate/GFF columns.
-- Joins eggNOG annotations by query or locus tag, including normalization of common identifiers such as `P1_1_00959` → `P1_00959`.
-- Checks whether each CDS identifier appears in the supplied KEGG list.
-- Associates CDS coordinates with antiSMASH regions by coordinate overlap.
-- Preserves an optional existing `Output` annotation sheet and fills missing fields where possible.
-- Combines multiple matches into a single cell so the output remains one row per CDS.
-- Writes a UTF-8 TSV file suitable for Excel, R, Python, and other downstream workflows.
-- The Windows version checks for required Python packages and attempts to install missing dependencies.
+## Versioning
 
-## Input workbook
+AI-Parser uses `MAJOR.MINOR.PATCH` versioning. While the project is in `0.x`, increment the minor number for a meaningful feature release and the patch number for bug fixes. This working copy identifies itself as `0.2.0`; the existing GitHub release can remain `0.1.2` until you commit and publish the newer version.
 
-AI-Parser reads a single Excel workbook (`.xlsx`) containing worksheets with the following names (case-insensitive):
+## What changed
 
-| Worksheet | Required? | Purpose |
-|---|---|---|
-| `Prokka` | Strongly recommended | Master list of CDS identifiers and genomic coordinates |
-| `Roary` | Optional | Gene-cluster and isolate/presence metadata |
-| `eggnog` | Optional | Functional annotation by query/locus tag |
-| `KEGG` | Optional | CDS ID list and/or available KEGG annotation columns |
-| `antiSMASH` | Optional | BGC region summary and coordinates |
-| `Output` | Optional | Existing annotation table to preserve and supplement |
+- Each tool can now be supplied as its own independent file; no combined Excel workbook is required.
+- **Bakta and Prokka are alternative master gene lists.** Bakta takes precedence if both are supplied.
+- Roary, eggNOG, KEGG/BlastKOALA, and antiSMASH are all optional.
+- An Excel file (`.xlsx`/`.xlsm`) can be supplied for each source instead of its usual text output.
+- The parser uses file extension and column headers/content to read supported formats. If a table's headers do not identify it confidently, the program reports an error with the observed headers instead of silently treating it as the wrong tool.
+- The original multi-sheet workbook mode remains available with `--input` for backwards compatibility.
 
-**The `Output` worksheet is not required.** It was used in the example workbook as an existing annotation table. If it is absent, AI-Parser creates the output columns and builds the gene list from Prokka. If Prokka has no usable records, the current script can fall back to the `Output` sheet; without either source, there is no master gene list to process.
+## Supported inputs
 
-For complete worksheet specifications, supported column headers, example layouts, and matching details, see **[`ai-parser_readme_supported_layout.md`](ai-parser_readme_supported_layout.md)**.
+| Tool | Preferred native output | Other supported inputs | Notes |
+|---|---|---|---|
+| **Bakta** | `*.tsv` | `.csv`, `.xlsx`/`.xlsm`, `.gff`/`.gff3` | Use the main Bakta TSV or GFF3 with locus tags and coordinates. Bakta is the master list if supplied. |
+| **Prokka** | `*.tsv` | `.csv`, `.xlsx`/`.xlsm`, `.gff`/`.gff3` | Prokka TSV and common headered feature tables are supported; legacy headerless 7-column extracts are supported in workbook mode. |
+| **Roary** | `gene_presence_absence.csv` | `.tsv`, `.xlsx`/`.xlsm` | The standard gene presence/absence table is preferred. `gene_presence_absence.Rtab` is a presence/absence matrix and does not contain the same annotation metadata as the CSV. |
+| **eggNOG-mapper** | `*.emapper.annotations` | `.tsv`, `.csv`, `.xlsx`/`.xlsm` | Metadata/comment preambles are skipped and the `#query` header is preserved. Column order can vary by eggNOG-mapper version. |
+| **KEGG / BlastKOALA** | Downloaded tab-delimited result | `.txt`, `.tsv`, `.csv`, `.xlsx`/`.xlsm` | Supports headerless ID-only lists and the usual 2-column sequence-ID/K-number or 3-column sequence-ID/K-number/definition result. Headered tables with recognized ID/KO/annotation columns are also supported. |
+| **antiSMASH** | Region-summary table with region, type, and coordinates | `.tsv`, `.csv`, `.xlsx`/`.xlsm` | Supply a tabular summary with start/end (e.g. From/To) columns. The HTML report and region GenBank files are not parsed directly by this version. |
+
+The parser does **not** directly read every output produced by each tool. In particular, use the structured tables above rather than HTML reports, and use an antiSMASH region-summary table rather than raw GenBank/JSON output. If a source does not expose a suitable tabular file, export/prepare a table with the required identifiers and fields first.
 
 ## Requirements
 
-- Python 3
+- Python 3.9 or newer recommended
 - `pandas`
-- `openpyxl`
+- `openpyxl` for Excel input
 
-The Windows-enabled script checks whether `pandas` and `openpyxl` are installed and attempts to install any missing packages using `pip`. This requires a working Python installation and internet access when a package needs to be downloaded.
-
-## Installation and usage
-
-### Windows: Command Prompt
-
-1. Install Python 3 from [python.org](https://www.python.org/downloads/windows/). During installation, enable **Add Python to PATH**.
-2. Put `ai-parser.py`, `run-ai-parser.bat`, and your input workbook in a folder, for example:
-
-   ```text
-   C:\AI-Parser\
-       ai-parser.py
-       run-ai-parser.bat
-       Sample data.xlsx
-   ```
-
-3. Open Command Prompt and navigate to the folder:
-
-   ```bat
-   cd /d C:\AI-Parser
-   ```
-
-4. Run the parser:
-
-   ```bat
-   py -3 ai-parser.py --input "Sample data.xlsx" --out merged_gene_annotations.tsv
-   ```
-
-If `py` is not recognized, try using `python` instead:
-
-```bat
-python ai-parser.py --input "Sample data.xlsx" --out merged_gene_annotations.tsv
-```
-
-### Windows: batch launcher
-
-Keep `run-ai-parser.bat` in the same folder as `ai-parser.py`. Run:
-
-```bat
-run-ai-parser.bat "Sample data.xlsx"
-```
-
-To choose the output filename:
-
-```bat
-run-ai-parser.bat "Sample data.xlsx" "final_annotations.tsv"
-```
-
-Use quotation marks around filenames or paths that contain spaces.
-
-### Manual dependency installation
-
-If automatic installation fails, run:
+The script checks for `pandas` and `openpyxl` and attempts to install missing packages using the active Python interpreter. This requires a working `pip` and internet access. Manual installation:
 
 ```bat
 py -3 -m pip install pandas openpyxl
 ```
 
-Then run AI-Parser again.
+## Usage (Windows Command Prompt)
 
-## Output
+Place `ai-parser.py` and your input files in a folder. Individual source inputs are optional except that either Bakta or Prokka is required to create the master gene list.
 
-The default output file is:
-
-```text
-merged_gene_annotations.tsv
+```bat
+py -3 ai-parser.py --bakta "bakta.tsv" --roary "gene_presence_absence.csv" --eggnog "sample.emapper.annotations" --kegg "blastkoala.txt" --antismash "regions.tsv" --out "merged_gene_annotations.tsv"
 ```
 
-The output contains one row per unique Prokka CDS identifier when Prokka records are available. It retains columns from an existing `Output` sheet, if provided, followed by derived annotation fields from the other sources.
+A Prokka-based run can instead use:
 
-Examples of merged fields include:
+```bat
+py -3 ai-parser.py --prokka "prokka.tsv" --eggnog "sample.emapper.annotations" --out "merged_gene_annotations.tsv"
+```
 
-- Prokka locus tag, contig, feature, strand, coordinates, and product
-- Roary gene cluster and annotation metadata
-- eggNOG gene name, product, description, functional category, EC number, E-value, and bit score (when available)
-- KEGG ID-list match status
-- antiSMASH region, biosynthetic type, region coordinates, similarity confidence, and closest known cluster
-- Match basis and CDS/region overlap status
+For example, to use an Excel export for a source:
 
-Open the TSV in Excel and select **Tab** as the delimiter if prompted.
+```bat
+py -3 ai-parser.py --bakta "bakta.xlsx" --roary "roary.xlsx" --eggnog "eggnog.xlsx" --out "merged_gene_annotations.tsv"
+```
 
-## Matching behavior and limitations
+The original multi-sheet workbook remains supported:
 
-- **Prokka** supplies the preferred master CDS list.
-- **Roary** matching depends on IDs in the relevant isolate/GFF columns corresponding to Prokka locus tags or normalized equivalents.
-- **eggNOG** matching depends on a recognized query/locus-tag column and compatible IDs.
-- **KEGG** ID-list matching indicates whether a CDS ID is present in the supplied list. If the KEGG worksheet contains only IDs, AI-Parser cannot infer KO numbers, pathways, or functional annotations that are not present in the source.
-- **antiSMASH** matching is based on numeric coordinate overlap. The current implementation does not verify contig identity during this overlap check, so CDS and BGC coordinates must be from the same sequence/coordinate context. An overlap alone does not prove a gene's biological function in a BGC.
-- Missing worksheets or unrecognized columns may result in blank annotations for that source.
+```bat
+py -3 ai-parser.py --input "Legacy workbook.xlsx" --out "merged_gene_annotations.tsv"
+```
+
+Do not combine `--input` with individual source options. Use quotation marks around paths containing spaces. If `py` is not recognized, try `python` instead.
+
+## Output and matching
+
+The output defaults to `merged_gene_annotations.tsv`. It contains one row per unique Bakta/Prokka locus tag, plus any rows retained from an optional legacy `Output` worksheet. Annotation columns are appended for Roary, eggNOG, KEGG, and antiSMASH.
+
+- **Bakta/Prokka:** supplies the master CDS identifiers and, when available, contig, feature, strand, coordinates, gene, and product.
+- **Roary:** joins gene clusters using isolate/GFF cells that contain matching locus tags.
+- **eggNOG-mapper:** joins by query/locus tag, including normalization of common variants such as `P1_1_00959` to `P1_00959`.
+- **KEGG/BlastKOALA:** imports K numbers and definitions when present; an ID-only list can only report identifier membership.
+- **antiSMASH:** associates CDS with region(s) by numeric coordinate overlap. This implementation does not verify contig identity, so only use region coordinates from the same contig/coordinate context as the master CDS list. Coordinate overlap is not proof of biological function.
+
+Multiple matches are combined into a single cell. Missing optional files are skipped. A missing or unrecognized source header produces a warning/error instead of an assumed match.
 
 ## Troubleshooting
 
-| Problem | Suggested check |
+| Problem | Check |
 |---|---|
-| `'py' is not recognized` | Install Python and enable PATH, or try `python` instead. |
-| `No module named pip` | Repair the Python installation or enable/install `pip`. |
-| Dependency installation fails | Check internet access, proxy settings, and package permissions. |
-| Input workbook not found | Confirm the path and filename; quote paths containing spaces. |
-| Roary fields are blank | Confirm the GFF/isolate column IDs match Prokka locus tags. |
-| eggNOG fields are blank | Confirm the sheet has a recognized query/locus-tag column and matching IDs. |
-| antiSMASH fields are blank | Confirm the region summary has numeric start/end coordinates compatible with Prokka coordinates. |
-| KEGG has matches but no pathway details | Check whether the KEGG worksheet contains annotation columns; an ID-only list provides only ID matching. |
+| Python launcher not recognized | Install Python and enable PATH, or use `python` instead of `py -3`. |
+| Dependency installation fails | Check internet access and run the manual pip command above. |
+| No gene/CDS rows | Provide a usable Bakta or Prokka feature table. |
+| Roary annotations are blank | Check that isolate/GFF cells contain the same locus tags as the master list. |
+| eggNOG annotations are blank | Check that the `#query` values match master locus tags after normalization. |
+| KEGG has no KO annotations | Confirm that the supplied result includes K numbers/definitions, not only IDs. |
+| antiSMASH annotations are blank | Supply a region summary with numeric From/To or Start/End columns and compatible coordinates. |
+| Source not identified | Check the error's displayed headers and supply the native table or a supported Excel export. |
 
 ## Project files
 
-| File | Description |
-|---|---|
-| `ai-parser.py` | Main parser |
-| `run-ai-parser.bat` | Optional Windows launcher |
-| `ai-parser_readme.md` | Original short project notes |
-| `ai-parser_readme_supported_layout.md` | Detailed workbook layout and matching guide |
-| `README.md` | Main GitHub project page |
+- `ai-parser.py` — main parser
+- `README.md` — project overview and usage
+- `ai-parser_readme_supported_layout.md` — detailed format and matching notes
 
-## License
-
-Add a `LICENSE` file to the repository to make the reuse and redistribution terms explicit. If you choose the MIT License, use the official [MIT License text](https://opensource.org/license/mit) and confirm that you have the right to license the project under your name.
-
----
-
-Copyright © 2026 Zachary B. Lara
+© Z. B. Lara, 2026
