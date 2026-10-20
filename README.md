@@ -1,8 +1,6 @@
 # AI-Parser — Annotation Intermerger
 
-**AI-Parser** merges gene annotations from **Prokka, Roary, eggNOG, KEGG, and antiSMASH** into a single tab-separated values (TSV) file, with **one row per Prokka CDS**.
-
-It is designed to help researchers consolidate gene identifiers, functional annotations, pangenome information, and biosynthetic gene cluster (BGC) context for downstream analysis.
+**AI-Parser** merges gene/CDS annotations from **Bakta or Prokka**, **Roary**, **eggNOG-mapper**, **KEGG/BlastKOALA**, and **antiSMASH** into one UTF-8 tab-separated file, with one row per unique master CDS identifier.
 
 ## Features
 
@@ -20,11 +18,9 @@ It is designed to help researchers consolidate gene identifiers, functional anno
 
 This `0.2.0` version adds separate per-tool inputs and Bakta support. Check the installed script version with `py -3 ai-parser.py --version`.
 
-AI-Parser merges gene/CDS annotations from **Bakta or Prokka**, **Roary**, **eggNOG-mapper**, **KEGG/BlastKOALA**, and **antiSMASH** into one UTF-8 tab-separated file, with one row per unique master CDS identifier.
-
 ## Versioning
 
-AI-Parser uses `MAJOR.MINOR.PATCH` versioning. While the project is in `0.x`, increment the minor number for a meaningful feature release and the patch number for bug fixes. This working copy identifies itself as `0.2.0`; the existing GitHub release can remain `0.1.2` until you commit and publish the newer version.
+AI-Parser uses `MAJOR.MINOR.PATCH` versioning. While the project is in `0.x`, increment the minor number for a meaningful feature release and the patch number for bug fixes.
 
 ## What changed
 
