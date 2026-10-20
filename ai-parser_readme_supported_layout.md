@@ -1,6 +1,8 @@
 # AI-Parser — Supported input formats and matching details
 
-**Documentation for AI-Parser `0.2.0` (development version).** The GitHub release `0.1.2` is a separate, unchanged release until updated and tagged. Run `py -3 ai-parser.py --version` to check the version of this script.
+Merge Roary, Prokka, eggNOG, KEGG, and antiSMASH annotations into a single TSV table with **one row per Prokka CDS**.
+
+**Documentation for AI-Parser `0.2.0` (development version).** Run `py -3 ai-parser.py --version` to check the version of this script.
 
 This guide describes the individual-file workflow in `ai-parser.py`. Each annotation source can be supplied separately, and each source is optional except for the master gene list (**Bakta or Prokka**). If both are supplied, Bakta is used as the master list. Excel `.xlsx`/`.xlsm` exports are supported for each source.
 

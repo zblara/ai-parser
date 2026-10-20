@@ -1,8 +1,24 @@
 # AI-Parser — Annotation Intermerger
 
+**AI-Parser** merges gene annotations from **Prokka, Roary, eggNOG, KEGG, and antiSMASH** into a single tab-separated values (TSV) file, with **one row per Prokka CDS**.
+
+It is designed to help researchers consolidate gene identifiers, functional annotations, pangenome information, and biosynthetic gene cluster (BGC) context for downstream analysis.
+
+## Features
+
+- Uses Prokka CDS/locus tags as the main gene list when Prokka data are available.
+- Matches Roary gene clusters using Prokka identifiers in isolate/GFF columns.
+- Joins eggNOG annotations by query or locus tag, including normalization of common identifiers such as `P1_1_00959` → `P1_00959`.
+- Checks whether each CDS identifier appears in the supplied KEGG list.
+- Associates CDS coordinates with antiSMASH regions by coordinate overlap.
+- Preserves an optional existing `Output` annotation sheet and fills missing fields where possible.
+- Combines multiple matches into a single cell so the output remains one row per CDS.
+- Writes a UTF-8 TSV file suitable for Excel, R, Python, and other downstream workflows.
+- The Windows version checks for required Python packages and attempts to install missing dependencies.
+
 **Version: `0.2.0`** (development version)
 
-The GitHub version `0.1.2` remains unchanged until you publish a new release. This local `0.2.0` version adds separate per-tool inputs and Bakta support. Check the installed script version with `py -3 ai-parser.py --version`.
+This `0.2.0` version adds separate per-tool inputs and Bakta support. Check the installed script version with `py -3 ai-parser.py --version`.
 
 AI-Parser merges gene/CDS annotations from **Bakta or Prokka**, **Roary**, **eggNOG-mapper**, **KEGG/BlastKOALA**, and **antiSMASH** into one UTF-8 tab-separated file, with one row per unique master CDS identifier.
 
